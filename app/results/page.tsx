@@ -1,10 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-
-/* ===========================
-   TYPES
-=========================== */
+import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 
 type Tone = "calm" | "bold" | "motivational" | "direct";
 
@@ -15,30 +12,32 @@ type IdeaCard = {
   why: string;
 };
 
-/* ===========================
-   HELPERS
-=========================== */
-
 function normalizeKey(s: string) {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function uniqBy<T>(items: T[], keyFn: (x: T) => string) {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const it of items) {
+    const k = keyFn(it);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(it);
+  }
+  return out;
+}
+
+function pickRandom<T>(arr: T[]) {
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 function makeId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-function shuffle<T>(arr: T[]) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
 /** ✅ Copy ultra fiable (HTTPS / iPhone / fallback) */
 async function copyToClipboard(text: string) {
-  // 1) API moderne
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -48,7 +47,6 @@ async function copyToClipboard(text: string) {
     // ignore
   }
 
-  // 2) Fallback textarea
   try {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -69,74 +67,14 @@ async function copyToClipboard(text: string) {
   }
 }
 
-/* ===========================
-   IDEAS + WHY
-=========================== */
+/** ✅ STORAGE KEYS */
+const SAVED_KEY = "savedIdeas_v2";
+const SEEN_KEY = "seenIdeas_v1";
 
-function ideaPool(tone: Tone): string[] {
-  const pools: Record<Tone, string[]> = {
-    calm: [
-      "Less text. Calm visuals.",
-      "Minimal words, maximum meaning.",
-      "Quiet posts can be powerful.",
-      "Keep it simple today.",
-      "One clear idea. One short sentence.",
-      "Soft tone, strong message.",
-      "Consistency beats intensity.",
-    ],
-    bold: [
-      "Say one strong thing. Say it clearly.",
-      "Stop overthinking. Post it.",
-      "Short. Direct. No excuses.",
-      "Clarity wins attention.",
-      "Post the take. Own it.",
-      "One message. One post. Go.",
-      "Aesthetic second. Truth first.",
-    ],
-    motivational: [
-      "Show up today. Momentum comes later.",
-      "Progress beats perfection.",
-      "One post can change your week.",
-      "Small steps build big results.",
-      "Post today. Thank yourself tomorrow.",
-      "Do it before you feel ready.",
-      "Consistency builds confidence.",
-    ],
-    direct: [
-      "Clarity first. Aesthetic second.",
-      "Say it simply. Ship it.",
-      "One message. One post. Go.",
-      "Cut the fluff. Keep the point.",
-      "Make it obvious. Make it fast.",
-      "Less explaining. More posting.",
-      "Strong idea. Clean execution.",
-    ],
-  };
-
-  return pools[tone] ?? pools.calm;
-}
-
-function pickWhy(tone: Tone, topicRaw: string) {
-  const topic = topicRaw.trim();
-  const base: Record<Tone, string> = {
-    calm: "Calm posts are easier to read, so people save them more.",
-    bold: "Bold clarity stops the scroll and gets reactions fast.",
-    motivational: "Short encouragement feels relatable and shareable.",
-    direct: "Direct language is understood instantly on mobile.",
-  };
-
-  if (!topic) return base[tone];
-
-  return `${base[tone]} It fits the topic “${topic}” without over-explaining.`;
-}
-
-/* ===========================
-   LOCAL STORAGE (Saved ideas)
-=========================== */
-
+/** ✅ Load / Save Saved Ideas */
 function loadSavedFromStorage(): IdeaCard[] {
   try {
-    const raw = localStorage.getItem("savedIdeas_v2");
+    const raw = localStorage.getItem(SAVED_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -153,104 +91,301 @@ function loadSavedFromStorage(): IdeaCard[] {
   }
 }
 
-function saveToStorage(items: IdeaCard[]) {
+function saveSavedToStorage(items: IdeaCard[]) {
   try {
-    localStorage.setItem("savedIdeas_v2", JSON.stringify(items));
+    localStorage.setItem(SAVED_KEY, JSON.stringify(items));
   } catch {
     // ignore
   }
 }
 
-/* ===========================
-   PAGE (single file, no Suspense error)
-=========================== */
+/** ✅ Load / Save Seen Ideas (anti-dup globale) */
+function loadSeen(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((x) => typeof x === "string"));
+  } catch {
+    return new Set();
+  }
+}
 
-/**
- * ✅ IMPORTANT:
- * On NE FAIT PAS useSearchParams().
- * On récupère u/topic depuis l'URL via window.location dans un useEffect,
- * donc aucun "Suspense" nécessaire et Vercel build OK.
- */
-export default function ResultsPage() {
-  const [username, setUsername] = useState("user");
-  const [topic, setTopic] = useState("");
+function saveSeen(set: Set<string>) {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+}
+
+function clearSeen() {
+  try {
+    localStorage.removeItem(SEEN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** ✅ Idea pool (élargi pour éviter répétitions) */
+function ideaPool(tone: Tone): string[] {
+  const pools: Record<Tone, string[]> = {
+    calm: [
+      "Less text. Calm visuals.",
+      "Minimal words, maximum meaning.",
+      "Quiet posts can be powerful.",
+      "Keep it simple today.",
+      "One clear idea. One short sentence.",
+      "Soft tone, strong message.",
+      "Consistency beats intensity.",
+      "A calm message travels further.",
+      "Small post. Clean design. Strong signal.",
+      "Simple words feel premium.",
+      "Make it easy to read on mobile.",
+      "Let whitespace do the work.",
+    ],
+    bold: [
+      "Say one strong thing. Say it clearly.",
+      "Stop overthinking. Post it.",
+      "Short. Direct. No excuses.",
+      "Clarity wins attention.",
+      "Post the take. Own it.",
+      "One message. One post. Go.",
+      "Aesthetic second. Truth first.",
+      "Strong idea > perfect design.",
+      "Be specific. Be remembered.",
+      "Say the thing everyone avoids.",
+      "Cut the fluff. Deliver the point.",
+      "Opinion creates engagement.",
+    ],
+    motivational: [
+      "Show up today. Momentum comes later.",
+      "Progress beats perfection.",
+      "One post can change your week.",
+      "Small steps build big results.",
+      "Post today. Thank yourself tomorrow.",
+      "Do it before you feel ready.",
+      "Consistency builds confidence.",
+      "You don’t need motivation. You need a system.",
+      "Start small, stay steady.",
+      "Done is your superpower.",
+      "Post messy. Improve later.",
+      "Keep going: the work compounds.",
+    ],
+    direct: [
+      "Clarity first. Aesthetic second.",
+      "Say it simply. Ship it.",
+      "One message. One post. Go.",
+      "Cut the fluff. Keep the point.",
+      "Make it obvious. Make it fast.",
+      "Less explaining. More posting.",
+      "Strong idea. Clean execution.",
+      "One post = one takeaway.",
+      "Be useful in 10 words.",
+      "Your audience wants clarity, not essays.",
+      "Post it. Iterate.",
+      "Simple sells.",
+    ],
+  };
+
+  return pools[tone] ?? pools.calm;
+}
+
+/** ✅ TOPIC helpers */
+function getTopicCategory(topicRaw: string) {
+  const t = normalizeKey(topicRaw);
+  const hasAny = (words: string[]) => words.some((w) => t.includes(w));
+
+  if (hasAny(["study", "etude", "étude", "exams", "revision", "révision", "school", "uni", "homework"])) return "study";
+  if (hasAny(["skincare", "skin", "peau", "routine", "acne", "acné", "beauty", "glow"])) return "skincare";
+  if (hasAny(["fitness", "sport", "workout", "training", "gym", "muscu", "run"])) return "fitness";
+  if (hasAny(["money", "finance", "invest", "investment", "bourse", "etf", "budget"])) return "finance";
+  if (hasAny(["productivity", "productiv", "focus", "deep work", "habits", "discipline"])) return "productivity";
+  if (hasAny(["business", "startup", "marketing", "sales", "brand", "content"])) return "business";
+  return "generic";
+}
+
+/** ✅ Why pool – dépend de tone + topic */
+function whyPool(tone: Tone, topicRaw: string): string[] {
+  const cat = getTopicCategory(topicRaw);
+
+  const base: Record<Tone, string[]> = {
+    calm: [
+      "Calm posts feel easier to read, which increases saves.",
+      "Short, quiet ideas reduce cognitive load for the reader.",
+      "Minimal wording helps your message stand out naturally.",
+      "A calm tone builds trust and long-term consistency.",
+    ],
+    bold: [
+      "Strong opinions stop the scroll immediately.",
+      "Clear statements invite reactions and replies.",
+      "Bold phrasing makes ideas easier to remember.",
+      "Confidence creates attention without extra words.",
+    ],
+    motivational: [
+      "People save posts that make them feel capable.",
+      "Simple encouragement lowers pressure to act.",
+      "Motivation works best when it’s short and relatable.",
+      "Progress-focused ideas feel achievable and shareable.",
+    ],
+    direct: [
+      "Clear ideas are understood instantly on mobile.",
+      "One point per post increases retention.",
+      "Direct language removes friction for the reader.",
+      "Less explanation = faster engagement.",
+    ],
+  };
+
+  const topicSpecific: Record<string, string[]> = {
+    study: [
+      "Study content performs when it’s actionable and easy to scan.",
+      "Short advice reduces overwhelm and helps people apply it.",
+      "Clear frameworks get saved for later revision.",
+      "Consistency beats “perfect methods” for studying.",
+    ],
+    skincare: [
+      "Skincare posts get saved when they feel simple + repeatable.",
+      "Short routines reduce confusion, so people keep them.",
+      "Clear steps build trust more than long explanations.",
+      "Consistency messaging fits skincare better than “miracle fixes”.",
+    ],
+    fitness: [
+      "Fitness advice is saved when it’s simple enough to follow tomorrow.",
+      "One clear cue beats a long program for engagement.",
+      "People share workouts that feel achievable, not intimidating.",
+      "Consistency framing reduces “all or nothing” thinking.",
+    ],
+    finance: [
+      "Finance posts get shared when they feel clear and low-risk to try.",
+      "Simple rules are saved more than complex strategies.",
+      "Clarity builds trust fast in money topics.",
+      "Actionable steps outperform long theory threads.",
+    ],
+    productivity: [
+      "Productivity advice wins when it reduces friction immediately.",
+      "Short systems are easier to adopt and keep.",
+      "Clear focus prompts get saved for daily use.",
+      "One habit is more believable than a full “life reset”.",
+    ],
+    business: [
+      "Business content performs when it’s a clear lesson + a simple takeaway.",
+      "Short, confident statements invite debate and replies.",
+      "People save frameworks they can reuse in their own work.",
+      "Clarity beats jargon for engagement.",
+    ],
+    generic: [
+      "Specific and simple ideas feel more shareable.",
+      "Short posts are easier to read, save, and repost.",
+      "One point per post increases retention.",
+      "Clarity makes people stop scrolling.",
+    ],
+  };
+
+  const topicArr = topicSpecific[cat] ?? topicSpecific.generic;
+  const baseArr = base[tone] ?? base.calm;
+  return [...topicArr, ...baseArr];
+}
+
+function pickWhy(tone: Tone, topicRaw: string) {
+  return pickRandom(whyPool(tone, topicRaw));
+}
+
+/** ✅ Pick unique text (banned = seen global + saved + current batch) */
+function pickUniqueText(tone: Tone, bannedKeys: Set<string>) {
+  const pool = ideaPool(tone);
+
+  // Essais aléatoires
+  for (let i = 0; i < 60; i++) {
+    const t = pickRandom(pool);
+    if (!bannedKeys.has(normalizeKey(t))) return t;
+  }
+
+  // Séquentiel fallback
+  for (const t of pool) {
+    if (!bannedKeys.has(normalizeKey(t))) return t;
+  }
+
+  // Si vraiment tout est épuisé -> on force une variante unique
+  const base = pool[0] ?? "Post something simple today.";
+  return `${base} (${new Date().toLocaleDateString()})`;
+}
+
+/* ------------------------------------------------------------------ */
+/* ------------------------- UI COMPONENT ---------------------------- */
+/* ------------------------------------------------------------------ */
+
+function ResultsInner() {
+  const sp = useSearchParams();
+  const username = sp.get("u") || "test";
+  const topic = sp.get("topic") || "";
 
   const [tone, setTone] = useState<Tone>("calm");
   const [ideas, setIdeas] = useState<IdeaCard[]>([]);
-
   const [savedIdeas, setSavedIdeas] = useState<IdeaCard[]>([]);
+  const [savedFlash, setSavedFlash] = useState<Record<string, boolean>>({});
+  const [whyOpen, setWhyOpen] = useState<Record<string, boolean>>({});
   const [hydrated, setHydrated] = useState(false);
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const copyTimers = useRef<Record<string, any>>({});
-
-  const [whyOpen, setWhyOpen] = useState<Record<string, boolean>>({});
-  const [savedFlash, setSavedFlash] = useState<Record<string, boolean>>({});
   const flashTimers = useRef<Record<string, any>>({});
 
-  /* ---- read URL params (client) ---- */
-  useEffect(() => {
-    try {
-      const sp = new URLSearchParams(window.location.search);
-      setUsername(sp.get("u") || "user");
-      setTopic(sp.get("topic") || "");
-    } catch {
-      // ignore
-    }
-  }, []);
+  // ✅ seen global set (anti-dup)
+  const seenRef = useRef<Set<string>>(new Set());
 
-  /* ---- load saved on mount ---- */
+  // Load saved + seen on mount
   useEffect(() => {
-    const saved = loadSavedFromStorage();
-    // uniq by text
-    const seen = new Set<string>();
-    const clean: IdeaCard[] = [];
-    for (const it of saved) {
-      const k = normalizeKey(it.text);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      clean.push(it);
-    }
-    setSavedIdeas(clean);
+    const saved = uniqBy(loadSavedFromStorage(), (x) => normalizeKey(x.text));
+    setSavedIdeas(saved);
+
+    const seen = loadSeen();
+    seenRef.current = seen;
+
     setHydrated(true);
   }, []);
 
-  /* ---- persist saved ---- */
+  // Persist saved whenever it changes
   useEffect(() => {
     if (!hydrated) return;
-    saveToStorage(savedIdeas);
+    saveSavedToStorage(savedIdeas);
   }, [savedIdeas, hydrated]);
 
-  const savedKeySet = useMemo(() => {
-    return new Set(savedIdeas.map((x) => normalizeKey(x.text)));
-  }, [savedIdeas]);
+  const savedKeySet = useMemo(() => new Set(savedIdeas.map((x) => normalizeKey(x.text))), [savedIdeas]);
 
-  /* ---- generate 3 UNIQUE ideas (no duplicates) ---- */
+  // Generate 3 ideas when tone changes
   useEffect(() => {
     if (!hydrated) return;
 
-    // On exclut d’abord les saved
-    const pool = ideaPool(tone).filter((t) => !savedKeySet.has(normalizeKey(t)));
+    const banned = new Set<string>([
+      ...Array.from(savedKeySet),
+      ...Array.from(seenRef.current), // ✅ anti-dup global
+    ]);
 
-    // si pool trop petit, on reprend tout
-    const base = pool.length >= 3 ? pool : ideaPool(tone);
+    const out: IdeaCard[] = [];
+    for (let i = 0; i < 3; i++) {
+      const text = pickUniqueText(tone, banned);
+      const key = normalizeKey(text);
 
-    // SHUFFLE 1 fois -> on prend les 3 premières => plus de doublons
-    const picked = shuffle(base).slice(0, 3);
+      banned.add(key);
+      seenRef.current.add(key);
 
-    const out: IdeaCard[] = picked.map((text) => ({
-      id: makeId(),
-      tone,
-      text,
-      why: pickWhy(tone, topic),
-    }));
+      out.push({
+        id: makeId(),
+        tone,
+        text,
+        why: pickWhy(tone, topic),
+      });
+    }
+
+    saveSeen(seenRef.current);
 
     setIdeas(out);
-    setWhyOpen({});
     setSavedFlash({});
-  }, [tone, topic, hydrated, savedKeySet]);
+    setWhyOpen({});
+  }, [tone, hydrated, savedKeySet, topic]);
 
-  /* ---- cleanup timers ---- */
+  // cleanup timers
   useEffect(() => {
     return () => {
       Object.values(copyTimers.current).forEach((t) => clearTimeout(t));
@@ -269,10 +404,6 @@ export default function ResultsPage() {
     setCopiedKey(key);
     if (copyTimers.current[key]) clearTimeout(copyTimers.current[key]);
     copyTimers.current[key] = setTimeout(() => setCopiedKey(null), 1200);
-  }
-
-  function toggleWhy(id: string) {
-    setWhyOpen((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
   function flashSaved(id: string) {
@@ -294,7 +425,8 @@ export default function ResultsPage() {
   function onSave(idea: IdeaCard) {
     const key = normalizeKey(idea.text);
     if (savedKeySet.has(key)) return;
-    setSavedIdeas((prev) => [idea, ...prev]);
+
+    setSavedIdeas((prev) => uniqBy([idea, ...prev], (x) => normalizeKey(x.text)));
     flashSaved(idea.id);
   }
 
@@ -311,15 +443,26 @@ export default function ResultsPage() {
     setIdeas((prev) => {
       const current = [...prev];
 
-      // interdit: saved + les 2 autres idées
-      const banned = new Set<string>(savedKeySet);
+      const banned = new Set<string>([
+        ...Array.from(savedKeySet),
+        ...Array.from(seenRef.current),
+      ]);
+
+      // On autorise l'idée actuelle à être remplacée (donc on retire sa clé de banned le temps du remplacement)
+      const currentKey = normalizeKey(current[index].text);
+      banned.delete(currentKey);
+
+      // On interdit les autres 2 idées du batch
       current.forEach((it, i) => {
-        if (i !== index) banned.add(normalizeKey(it.text));
+        if (i === index) return;
+        banned.add(normalizeKey(it.text));
       });
 
-      const candidates = ideaPool(tone).filter((t) => !banned.has(normalizeKey(t)));
-      const base = candidates.length ? candidates : ideaPool(tone);
-      const newText = shuffle(base)[0];
+      const newText = pickUniqueText(tone, banned);
+      const newKey = normalizeKey(newText);
+
+      seenRef.current.add(newKey);
+      saveSeen(seenRef.current);
 
       current[index] = {
         id: makeId(),
@@ -327,30 +470,53 @@ export default function ResultsPage() {
         text: newText,
         why: pickWhy(tone, topic),
       };
+
       return current;
     });
   }
 
   function regenerateAll() {
-    const pool = ideaPool(tone).filter((t) => !savedKeySet.has(normalizeKey(t)));
-    const base = pool.length >= 3 ? pool : ideaPool(tone);
-    const picked = shuffle(base).slice(0, 3);
+    const banned = new Set<string>([
+      ...Array.from(savedKeySet),
+      ...Array.from(seenRef.current),
+    ]);
 
-    setIdeas(
-      picked.map((text) => ({
+    const out: IdeaCard[] = [];
+    for (let i = 0; i < 3; i++) {
+      const text = pickUniqueText(tone, banned);
+      const key = normalizeKey(text);
+
+      banned.add(key);
+      seenRef.current.add(key);
+
+      out.push({
         id: makeId(),
         tone,
         text,
         why: pickWhy(tone, topic),
-      }))
-    );
-    setWhyOpen({});
+      });
+    }
+
+    saveSeen(seenRef.current);
+
+    setIdeas(out);
     setSavedFlash({});
+    setWhyOpen({});
+  }
+
+  function toggleWhy(id: string) {
+    setWhyOpen((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
   async function copyAll() {
     const text = ideas.map((x) => `• ${x.text}`).join("\n");
     await onCopy(text, "copy-all");
+  }
+
+  function resetSeenIdeas() {
+    clearSeen();
+    seenRef.current = new Set();
+    alert("OK ✅ Les idées vues ont été réinitialisées.");
   }
 
   const toneLabel: Record<Tone, string> = {
@@ -368,7 +534,7 @@ export default function ResultsPage() {
           ← Back
         </a>
 
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <button
             onClick={copyAll}
             style={{
@@ -397,6 +563,21 @@ export default function ResultsPage() {
             }}
           >
             Regenerate all
+          </button>
+
+          <button
+            onClick={resetSeenIdeas}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid #e6e6e6",
+              background: "#fff",
+              color: "#111",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Reset seen
           </button>
         </div>
       </div>
@@ -476,7 +657,15 @@ export default function ResultsPage() {
                   <div style={{ fontSize: 18, fontWeight: 900 }}>{idea.text}</div>
                 </div>
 
-                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    justifyContent: "flex-end",
+                  }}
+                >
                   <button
                     onClick={() => onCopy(idea.text, copyKey)}
                     style={{
@@ -648,5 +837,14 @@ export default function ResultsPage() {
 
       <div style={{ marginTop: 18, color: "#999", fontSize: 12 }}>(If you don't see changes: hard refresh the page.)</div>
     </div>
+  );
+}
+
+/** ✅ IMPORTANT: Suspense obligatoire pour useSearchParams en build Vercel */
+export default function ResultsPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, fontFamily: "system-ui, -apple-system" }}>Loading…</div>}>
+      <ResultsInner />
+    </Suspense>
   );
 }
