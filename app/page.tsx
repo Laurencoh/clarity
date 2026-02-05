@@ -1,55 +1,118 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-export default function ResultsPage() {
-  const [username, setUsername] = useState("@unknown");
+export default function HomePage() {
+  const router = useRouter();
+  const [u, setU] = useState("");
+  const [topic, setTopic] = useState("");
 
+  // Load last inputs
   useEffect(() => {
-    const saved = sessionStorage.getItem("proof_username");
-    if (saved && saved.trim().length > 0) {
-      setUsername(saved.startsWith("@") ? saved : `@${saved}`);
-    }
+    try {
+      const lastU = localStorage.getItem("clarity_last_u") || "";
+      const lastT = localStorage.getItem("clarity_last_topic") || "";
+      setU(lastU);
+      setTopic(lastT);
+    } catch {}
   }, []);
 
+  // Save inputs as user types
+  useEffect(() => {
+    try {
+      localStorage.setItem("clarity_last_u", u);
+      localStorage.setItem("clarity_last_topic", topic);
+    } catch {}
+  }, [u, topic]);
+
+  const username = u.trim().replace(/^@/, "");
+  const t = topic.trim();
+  const canGo = !!username && !!t;
+
+  function go() {
+    if (!username) return alert("Écris ton @ (sans espaces).");
+    if (!t) return alert("Écris un topic (ex: productivité, skincare, étude...).");
+
+    const url = `/results?u=${encodeURIComponent(username)}&topic=${encodeURIComponent(t)}`;
+    router.push(url);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") go();
+  }
+
   return (
-    <main className="min-h-screen bg-white text-black px-6 py-12">
-      <div className="max-w-2xl">
-        <h1 className="text-4xl font-semibold mb-2">Results</h1>
+    <main
+      style={{
+        maxWidth: 720,
+        margin: "0 auto",
+        padding: 28,
+        fontFamily: "system-ui, -apple-system",
+      }}
+    >
+      <h1 style={{ fontSize: 44, margin: "0 0 8px 0" }}>Clarity</h1>
+      <p style={{ color: "#666", marginTop: 0 }}>
+        Donne ton @ et un topic → on te génère 3 idées de posts.
+      </p>
 
-        <Link href="/" className="text-sm underline text-zinc-600">
-          ← Back
-        </Link>
-
-        <p className="mt-6 text-zinc-700">
-          Analysis for <span className="font-medium text-black">{username}</span>
-        </p>
-
-        <div className="mt-8 space-y-6">
-          <div>
-            <div className="font-semibold mb-1">Top insight</div>
-            <div className="text-zinc-700">
-              Calm visuals + short text tend to perform best.
-            </div>
-          </div>
-
-          <div>
-            <div className="font-semibold mb-2">3 patterns</div>
-            <ul className="list-disc pl-5 text-zinc-700 space-y-1">
-              <li>Best posting window: 18:00–21:00</li>
-              <li>Less text → more engagement</li>
-              <li>Consistency beats viral luck</li>
-            </ul>
-          </div>
-
-          <div>
-            <div className="font-semibold mb-1">1 recommendation</div>
-            <div className="text-zinc-700">
-              Post once per day with one clear idea and a calm tone.
-            </div>
-          </div>
+      <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
+        <div>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Your X username</div>
+          <input
+            value={u}
+            onChange={(e) => setU(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="@lauren"
+            style={{
+              width: "100%",
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              fontSize: 16,
+            }}
+          />
         </div>
+
+        <div>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Topic</div>
+          <input
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="ex: productivité, skincare, études, finance..."
+            style={{
+              width: "100%",
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              fontSize: 16,
+            }}
+          />
+        </div>
+
+        <button
+          onClick={go}
+          disabled={!canGo}
+          style={{
+            marginTop: 6,
+            padding: "12px 14px",
+            borderRadius: 14,
+            border: "1px solid #111",
+            background: canGo ? "#111" : "#f2f2f2",
+            color: canGo ? "#fff" : "#999",
+            fontWeight: 800,
+            cursor: canGo ? "pointer" : "not-allowed",
+            fontSize: 16,
+          }}
+        >
+          Generate 3 ideas →
+        </button>
+      </div>
+
+      <div style={{ marginTop: 16, color: "#777", fontSize: 13 }}>
+        Tip: tu peux appuyer sur <b>Enter</b> pour générer. <br />
+        Exemple topic: “productivité”, “études”, “recettes”, “investissement”.
       </div>
     </main>
   );
