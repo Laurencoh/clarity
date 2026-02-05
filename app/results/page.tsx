@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 type Tone = "calm" | "bold" | "motivational" | "direct";
@@ -38,17 +38,13 @@ function makeId() {
 
 /** ✅ Copy ultra fiable (HTTPS / iPhone / fallback) */
 async function copyToClipboard(text: string) {
-  // 1) API moderne
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
 
-  // 2) Fallback textarea
   try {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -59,7 +55,7 @@ async function copyToClipboard(text: string) {
     document.body.appendChild(ta);
 
     ta.select();
-    ta.setSelectionRange(0, ta.value.length); // iOS
+    ta.setSelectionRange(0, ta.value.length);
 
     const ok = document.execCommand("copy");
     document.body.removeChild(ta);
@@ -113,30 +109,17 @@ function ideaPool(tone: Tone): string[] {
   return pools[tone] ?? pools.calm;
 }
 
-/** ✅ TOPIC helpers (V2-B): why dépend du topic */
+/** ✅ TOPIC helpers */
 function getTopicCategory(topicRaw: string) {
   const t = normalizeKey(topicRaw);
-
   const hasAny = (words: string[]) => words.some((w) => t.includes(w));
 
-  if (hasAny(["study", "etude", "étude", "exams", "revision", "révision", "school", "uni", "homework"])) {
-    return "study";
-  }
-  if (hasAny(["skincare", "skin", "peau", "routine", "acne", "acné", "beauty", "glow"])) {
-    return "skincare";
-  }
-  if (hasAny(["fitness", "sport", "workout", "training", "gym", "muscu", "run"])) {
-    return "fitness";
-  }
-  if (hasAny(["money", "finance", "invest", "investment", "bourse", "etf", "budget"])) {
-    return "finance";
-  }
-  if (hasAny(["productivity", "productiv", "focus", "deep work", "habits", "discipline"])) {
-    return "productivity";
-  }
-  if (hasAny(["business", "startup", "marketing", "sales", "brand", "content"])) {
-    return "business";
-  }
+  if (hasAny(["study", "etude", "étude", "exams", "revision", "révision", "school", "uni", "homework"])) return "study";
+  if (hasAny(["skincare", "skin", "peau", "routine", "acne", "acné", "beauty", "glow"])) return "skincare";
+  if (hasAny(["fitness", "sport", "workout", "training", "gym", "muscu", "run"])) return "fitness";
+  if (hasAny(["money", "finance", "invest", "investment", "bourse", "etf", "budget"])) return "finance";
+  if (hasAny(["productivity", "productiv", "focus", "deep work", "habits", "discipline"])) return "productivity";
+  if (hasAny(["business", "startup", "marketing", "sales", "brand", "content"])) return "business";
 
   return "generic";
 }
@@ -217,12 +200,10 @@ function whyPool(tone: Tone, topicRaw: string): string[] {
     ],
   };
 
-  // Mélange: 2 topic + 2 base (ça donne un why pertinent sans être répétitif)
   const topicArr = topicSpecific[cat] ?? topicSpecific.generic;
   const baseArr = base[tone] ?? base.calm;
 
-  const merged = [...topicArr.slice(0, 4), ...baseArr.slice(0, 4)];
-  return merged;
+  return [...topicArr.slice(0, 4), ...baseArr.slice(0, 4)];
 }
 
 function pickWhy(tone: Tone, topicRaw: string) {
@@ -267,15 +248,14 @@ function loadSavedFromStorage(): IdeaCard[] {
 function saveToStorage(items: IdeaCard[]) {
   try {
     localStorage.setItem("savedIdeas_v2", JSON.stringify(items));
-  } catch {
-    // ignore
-  }
+  } catch {}
 }
 
-export default function ResultsPage() {
+/** ✅ IMPORTANT: useSearchParams() ici, PAS dans le default export */
+function ResultsInner() {
   const sp = useSearchParams();
   const username = sp.get("u") || "test";
-  const topic = sp.get("topic") || ""; // ✅ récupère le topic de l’URL
+  const topic = sp.get("topic") || "";
 
   const [tone, setTone] = useState<Tone>("calm");
   const [ideas, setIdeas] = useState<IdeaCard[]>([]);
@@ -288,7 +268,6 @@ export default function ResultsPage() {
   const copyTimers = useRef<Record<string, any>>({});
   const flashTimers = useRef<Record<string, any>>({});
 
-  // Load saved on mount
   useEffect(() => {
     const saved = loadSavedFromStorage();
     const clean = uniqBy(saved, (x) => normalizeKey(x.text));
@@ -296,17 +275,13 @@ export default function ResultsPage() {
     setHydrated(true);
   }, []);
 
-  // Persist saved whenever it changes
   useEffect(() => {
     if (!hydrated) return;
     saveToStorage(savedIdeas);
   }, [savedIdeas, hydrated]);
 
-  const savedKeySet = useMemo(() => {
-    return new Set(savedIdeas.map((x) => normalizeKey(x.text)));
-  }, [savedIdeas]);
+  const savedKeySet = useMemo(() => new Set(savedIdeas.map((x) => normalizeKey(x.text))), [savedIdeas]);
 
-  // Generate 3 ideas ONLY when tone changes (or first hydration)
   useEffect(() => {
     if (!hydrated) return;
 
@@ -316,12 +291,7 @@ export default function ResultsPage() {
     for (let i = 0; i < 3; i++) {
       const text = pickUniqueText(tone, banned);
       banned.add(normalizeKey(text));
-      out.push({
-        id: makeId(),
-        tone,
-        text,
-        why: pickWhy(tone, topic), // ✅ why dépend du topic
-      });
+      out.push({ id: makeId(), tone, text, why: pickWhy(tone, topic) });
     }
 
     setIdeas(out);
@@ -329,7 +299,6 @@ export default function ResultsPage() {
     setWhyOpen({});
   }, [tone, hydrated, savedKeySet, topic]);
 
-  // cleanup timers
   useEffect(() => {
     return () => {
       Object.values(copyTimers.current).forEach((t) => clearTimeout(t));
@@ -352,7 +321,6 @@ export default function ResultsPage() {
 
   function flashSaved(id: string) {
     setSavedFlash((prev) => ({ ...prev, [id]: true }));
-
     if (flashTimers.current[id]) clearTimeout(flashTimers.current[id]);
     flashTimers.current[id] = setTimeout(() => {
       setSavedFlash((prev) => {
@@ -370,7 +338,6 @@ export default function ResultsPage() {
   function onSave(idea: IdeaCard) {
     const key = normalizeKey(idea.text);
     if (savedKeySet.has(key)) return;
-
     setSavedIdeas((prev) => uniqBy([idea, ...prev], (x) => normalizeKey(x.text)));
     flashSaved(idea.id);
   }
@@ -395,12 +362,7 @@ export default function ResultsPage() {
       });
 
       const newText = pickUniqueText(tone, banned);
-      current[index] = {
-        id: makeId(),
-        tone,
-        text: newText,
-        why: pickWhy(tone, topic), // ✅ why dépend du topic
-      };
+      current[index] = { id: makeId(), tone, text: newText, why: pickWhy(tone, topic) };
       return current;
     });
   }
@@ -412,12 +374,7 @@ export default function ResultsPage() {
     for (let i = 0; i < 3; i++) {
       const text = pickUniqueText(tone, banned);
       banned.add(normalizeKey(text));
-      out.push({
-        id: makeId(),
-        tone,
-        text,
-        why: pickWhy(tone, topic), // ✅ why dépend du topic
-      });
+      out.push({ id: makeId(), tone, text, why: pickWhy(tone, topic) });
     }
 
     setIdeas(out);
@@ -443,7 +400,6 @@ export default function ResultsPage() {
 
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", padding: "28px 18px", fontFamily: "system-ui, -apple-system" }}>
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <a href="/" style={{ color: "#111", textDecoration: "none", fontWeight: 600 }}>
           ← Back
@@ -483,9 +439,7 @@ export default function ResultsPage() {
       </div>
 
       <h1 style={{ fontSize: 44, margin: "0 0 6px 0", letterSpacing: -0.5 }}>Results</h1>
-      <div style={{ color: "#555", marginBottom: 16 }}>
-        Choose a tone, copy an idea, or regenerate if you want something different.
-      </div>
+      <div style={{ color: "#555", marginBottom: 16 }}>Choose a tone, copy an idea, or regenerate if you want something different.</div>
 
       <div style={{ marginBottom: 18 }}>
         <div style={{ fontWeight: 800, marginBottom: 4 }}>Analysis for @{username}</div>
@@ -499,7 +453,6 @@ export default function ResultsPage() {
           ) : null}
         </div>
 
-        {/* Tone Pills */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {(["calm", "bold", "motivational", "direct"] as Tone[]).map((t) => {
             const active = tone === t;
@@ -524,14 +477,11 @@ export default function ResultsPage() {
         </div>
       </div>
 
-      {/* Ideas */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18, marginBottom: 10 }}>
         <div style={{ fontSize: 26, fontWeight: 900 }}>✨ 3 post ideas you can use today</div>
       </div>
 
-      <div style={{ color: "#666", marginBottom: 16 }}>
-        Tip: copy one, post it as-is, and keep the visual calm.
-      </div>
+      <div style={{ color: "#666", marginBottom: 16 }}>Tip: copy one, post it as-is, and keep the visual calm.</div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         {ideas.map((idea, idx) => {
@@ -540,20 +490,10 @@ export default function ResultsPage() {
           const copyKey = `copy-${idea.id}`;
 
           return (
-            <div
-              key={idea.id}
-              style={{
-                border: "1px solid #e6e6e6",
-                borderRadius: 16,
-                padding: 16,
-                background: "#fff",
-              }}
-            >
+            <div key={idea.id} style={{ border: "1px solid #e6e6e6", borderRadius: 16, padding: 16, background: "#fff" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
                 <div>
-                  <div style={{ fontSize: 12, color: "#777", fontWeight: 700, marginBottom: 6 }}>
-                    Idea {idx + 1}/3
-                  </div>
+                  <div style={{ fontSize: 12, color: "#777", fontWeight: 700, marginBottom: 6 }}>Idea {idx + 1}/3</div>
                   <div style={{ fontSize: 18, fontWeight: 900 }}>{idea.text}</div>
                 </div>
 
@@ -624,17 +564,7 @@ export default function ResultsPage() {
               </div>
 
               {whyOpen[idea.id] && (
-                <div
-                  style={{
-                    marginTop: 12,
-                    padding: 12,
-                    borderRadius: 14,
-                    background: "#fafafa",
-                    border: "1px solid #eee",
-                    color: "#333",
-                    lineHeight: 1.35,
-                  }}
-                >
+                <div style={{ marginTop: 12, padding: 12, borderRadius: 14, background: "#fafafa", border: "1px solid #eee", color: "#333", lineHeight: 1.35 }}>
                   <div style={{ fontWeight: 900, marginBottom: 4 }}>Why it works</div>
                   <div style={{ color: "#555" }}>{idea.why}</div>
                 </div>
@@ -644,7 +574,6 @@ export default function ResultsPage() {
         })}
       </div>
 
-      {/* Saved Ideas */}
       <div style={{ marginTop: 26 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div style={{ fontSize: 20, fontWeight: 900 }}>⭐ Saved ideas</div>
@@ -652,15 +581,7 @@ export default function ResultsPage() {
           {savedIdeas.length > 0 && (
             <button
               onClick={onClearSaved}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 12,
-                border: "1px solid #cfcfcf",
-                background: "#fff",
-                color: "#111",
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
+              style={{ padding: "8px 12px", borderRadius: 12, border: "1px solid #cfcfcf", background: "#fff", color: "#111", fontWeight: 800, cursor: "pointer" }}
             >
               Clear
             </button>
@@ -693,29 +614,13 @@ export default function ResultsPage() {
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <button
                       onClick={() => onCopy(it.text, key)}
-                      style={{
-                        padding: "8px 12px",
-                        borderRadius: 12,
-                        border: "1px solid #111",
-                        background: "#111",
-                        color: "#fff",
-                        fontWeight: 800,
-                        cursor: "pointer",
-                      }}
+                      style={{ padding: "8px 12px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", fontWeight: 800, cursor: "pointer" }}
                     >
                       {copiedKey === key ? "Copied ✅" : "Copy"}
                     </button>
                     <button
                       onClick={() => onRemoveSaved(it.text)}
-                      style={{
-                        padding: "8px 12px",
-                        borderRadius: 12,
-                        border: "1px solid #cfcfcf",
-                        background: "#fff",
-                        color: "#111",
-                        fontWeight: 800,
-                        cursor: "pointer",
-                      }}
+                      style={{ padding: "8px 12px", borderRadius: 12, border: "1px solid #cfcfcf", background: "#fff", color: "#111", fontWeight: 800, cursor: "pointer" }}
                     >
                       Remove
                     </button>
@@ -729,5 +634,14 @@ export default function ResultsPage() {
 
       <div style={{ marginTop: 18, color: "#999", fontSize: 12 }}>(If you don't see changes: hard refresh the page.)</div>
     </div>
+  );
+}
+
+/** ✅ DEFAULT EXPORT: uniquement Suspense + composant enfant */
+export default function ResultsPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 28, fontFamily: "system-ui, -apple-system" }}>Loading…</div>}>
+      <ResultsInner />
+    </Suspense>
   );
 }
